@@ -1,0 +1,186 @@
+---
+# Tasks for cleaning up systemd journal logs
+# Uses journalctl to vacuum logs by size and time
+
+- name: Check if journalctl is available
+  ansible.builtin.command: which journalctl
+  register: journalctl_check
+  changed_when: false
+  failed_when: false
+  tags:
+    - cleanup
+    - journals
+
+- name: Check if systemd journal directory exists
+  ansible.builtin.stat:
+    path: /var/log/journal
+  register: journal_dir
+  tags:
+    - cleanup
+    - journals
+
+- name: Get current journal disk usage
+  ansible.builtin.command: journalctl --disk-usage
+  register: journal_usage_before
+  changed_when: false
+  when:
+    - journalctl_check.rc == 0
+    - journal_dir.stat.exists
+  tags:
+    - cleanup
+    - journals
+
+- name: Parse journal size before cleanup
+  ansible.builtin.set_fact:
+    journal_size_before: "{{ journal_usage_before.stdout | regex_search('([0-9.]+[KMGT])', '\\1') | first }}"
+  when:
+    - journalctl_check.rc == 0
+    - journal_dir.stat.exists
+    - journal_usage_before.stdout is defined
+  tags:
+    - cleanup
+    - journals
+
+- name: Verify journal integrity (if enabled)
+  ansible.builtin.command: journalctl --verify
+  register: journal_verify
+  changed_when: false
+  failed_when: false
+  when:
+    - journalctl_check.rc == 0
+    - journal_dir.stat.exists
+    - journal_verify_before_cleanup | bool
+  tags:
+    - cleanup
+    - journals
+
+- name: Display journal verification results
+  ansible.builtin.debug:
+    msg:
+      - "=== Journal Integrity Check ==="
+      - "{{ journal_verify.stdout_lines }}"
+  when:
+    - journal_verify_before_cleanup | bool
+    - journal_verify.stdout_lines is defined
+  tags:
+    - cleanup
+    - journals
+    - reporting
+
+- name: Display journal cleanup plan (dry-run)
+  ansible.builtin.debug:
+    msg:
+      - "=== Systemd Journal Cleanup (DRY-RUN) ==="
+      - "Current journal size: {{ journal_size_before | default('Unknown') }}"
+      - "Operations to perform:"
+      - "  - Vacuum by size: {{ journal_max_size }}"
+      - "  - Vacuum by time: {{ journal_max_time }}"
+      - ""
+      - "NOTE: This is a DRY-RUN. No changes will be made."
+      - "To perform actual cleanup, set cleanup_dry_run=false"
+  when:
+    - cleanup_dry_run | bool
+    - journalctl_check.rc == 0
+    - journal_dir.stat.exists
+  tags:
+    - cleanup
+    - journals
+    - reporting
+
+- name: Vacuum journal logs by size (actual cleanup)
+  ansible.builtin.command: "journalctl --vacuum-size={{ journal_max_size }}"
+  register: journal_vacuum_size
+  changed_when: "'Vacuuming done' in journal_vacuum_size.stdout"
+  when:
+    - not cleanup_dry_run | bool
+    - journalctl_check.rc == 0
+    - journal_dir.stat.exists
+  tags:
+    - cleanup
+    - journals
+
+- name: Vacuum journal logs by time (actual cleanup)
+  ansible.builtin.command: "journalctl --vacuum-time={{ journal_max_time }}"
+  register: journal_vacuum_time
+  changed_when: "'Vacuuming done' in journal_vacuum_time.stdout"
+  when:
+    - not cleanup_dry_run | bool
+    - journalctl_check.rc == 0
+    - journal_dir.stat.exists
+  tags:
+    - cleanup
+    - journals
+
+- name: Get journal disk usage after cleanup
+  ansible.builtin.command: journalctl --disk-usage
+  register: journal_usage_after
+  changed_when: false
+  when:
+    - not cleanup_dry_run | bool
+    - journalctl_check.rc == 0
+    - journal_dir.stat.exists
+  tags:
+    - cleanup
+    - journals
+
+- name: Parse journal size after cleanup
+  ansible.builtin.set_fact:
+    journal_size_after: "{{ journal_usage_after.stdout | regex_search('([0-9.]+[KMGT])', '\\1') | first }}"
+  when:
+    - not cleanup_dry_run | bool
+    - journalctl_check.rc == 0
+    - journal_dir.stat.exists
+    - journal_usage_after.stdout is defined
+  tags:
+    - cleanup
+    - journals
+
+- name: Display journal cleanup results
+  ansible.builtin.debug:
+    msg:
+      - "=== Systemd Journal Cleanup Results ==="
+      - "Journal size before: {{ journal_size_before | default('Unknown') }}"
+      - "Journal size after: {{ journal_size_after | default('Unknown') }}"
+      - "Vacuum by size output: {{ journal_vacuum_size.stdout_lines | default(['Not executed']) }}"
+      - "Vacuum by time output: {{ journal_vacuum_time.stdout_lines | default(['Not executed']) }}"
+  when:
+    - not cleanup_dry_run | bool
+    - journalctl_check.rc == 0
+    - journal_dir.stat.exists
+  tags:
+    - cleanup
+    - journals
+    - reporting
+
+- name: Display warning if journalctl not available
+  ansible.builtin.debug:
+    msg:
+      - "WARNING: journalctl command not found or systemd journal directory does not exist."
+      - "Journal cleanup will be skipped on this system."
+  when:
+    - journalctl_check.rc != 0 or not journal_dir.stat.exists
+  tags:
+    - cleanup
+    - journals
+    - reporting
+
+- name: Update cleanup statistics
+  ansible.builtin.set_fact:
+    cleanup_stats: >-
+      {{
+        cleanup_stats | default({}) | combine({
+          'journals': {
+            'size_before': journal_size_before | default('Unknown'),
+            'size_after': journal_size_after | default('Unknown'),
+            'max_size': journal_max_size,
+            'max_time': journal_max_time,
+            'dry_run': cleanup_dry_run | bool,
+            'available': journalctl_check.rc == 0 and journal_dir.stat.exists
+          }
+        })
+      }}
+  tags:
+    - cleanup
+    - journals
+
+# Made with Bob

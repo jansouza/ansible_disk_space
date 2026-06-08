@@ -1,0 +1,177 @@
+---
+# Tasks for cleaning up /var/log directory
+# Compresses old logs and removes very old logs
+
+- name: Check if /var/log directory exists
+  ansible.builtin.stat:
+    path: /var/log
+  register: log_dir
+  tags:
+    - cleanup
+    - logs
+
+- name: Find log files to compress
+  ansible.builtin.find:
+    paths: /var/log
+    age: "{{ log_compress_age_days }}d"
+    recurse: yes
+    file_type: file
+    patterns: "{{ log_file_patterns }}"
+    excludes: "{{ log_exclude_patterns }}"
+  register: logs_to_compress
+  when: log_dir.stat.exists
+  tags:
+    - cleanup
+    - logs
+
+- name: Find very old log files to delete
+  ansible.builtin.find:
+    paths: /var/log
+    age: "{{ log_file_age_days }}d"
+    recurse: yes
+    file_type: file
+    patterns: "{{ log_file_patterns }}"
+  register: logs_to_delete
+  when: log_dir.stat.exists
+  tags:
+    - cleanup
+    - logs
+
+- name: Calculate space to be freed from log deletion
+  ansible.builtin.set_fact:
+    logs_delete_size: >-
+      {{
+        logs_to_delete.files |
+        map(attribute='size') |
+        sum
+      }}
+  when:
+    - log_dir.stat.exists
+    - logs_to_delete.matched > 0
+  tags:
+    - cleanup
+    - logs
+
+- name: Calculate space from logs to compress
+  ansible.builtin.set_fact:
+    logs_compress_size: >-
+      {{
+        logs_to_compress.files |
+        map(attribute='size') |
+        sum
+      }}
+  when:
+    - log_dir.stat.exists
+    - logs_to_compress.matched > 0
+  tags:
+    - cleanup
+    - logs
+
+- name: Display log cleanup summary (dry-run)
+  ansible.builtin.debug:
+    msg:
+      - "=== /var/log Cleanup Summary (DRY-RUN) ==="
+      - "Log files to compress ({{ log_compress_age_days }}+ days old): {{ logs_to_compress.matched | default(0) }}"
+      - "Log files to delete ({{ log_file_age_days }}+ days old): {{ logs_to_delete.matched | default(0) }}"
+      - "Space to be freed from deletion: {{ (logs_delete_size | default(0) | int / 1024 / 1024) | round(2) }} MB"
+      - "Space from files to compress: {{ (logs_compress_size | default(0) | int / 1024 / 1024) | round(2) }} MB"
+      - ""
+      - "NOTE: This is a DRY-RUN. No files will be modified."
+      - "To perform actual cleanup, set cleanup_dry_run=false"
+  when:
+    - cleanup_dry_run | bool
+    - log_dir.stat.exists
+  tags:
+    - cleanup
+    - logs
+    - reporting
+
+- name: Display log files that would be compressed (dry-run, first 10)
+  ansible.builtin.debug:
+    msg: "Would compress: {{ item.path }}"
+  loop: "{{ logs_to_compress.files[:10] }}"
+  when:
+    - cleanup_dry_run | bool
+    - logs_to_compress.matched > 0
+  tags:
+    - cleanup
+    - logs
+    - reporting
+
+- name: Display log files that would be deleted (dry-run, first 10)
+  ansible.builtin.debug:
+    msg: "Would delete: {{ item.path }}"
+  loop: "{{ logs_to_delete.files[:10] }}"
+  when:
+    - cleanup_dry_run | bool
+    - logs_to_delete.matched > 0
+  tags:
+    - cleanup
+    - logs
+    - reporting
+
+- name: Compress old log files (actual cleanup)
+  community.general.archive:
+    path: "{{ item.path }}"
+    dest: "{{ item.path }}.gz"
+    format: gz
+    remove: yes
+  loop: "{{ logs_to_compress.files }}"
+  when:
+    - not cleanup_dry_run | bool
+    - log_dir.stat.exists
+    - logs_to_compress.matched > 0
+    - item.path not in logs_to_delete.files | map(attribute='path') | list
+  register: logs_compressed
+  ignore_errors: yes
+  tags:
+    - cleanup
+    - logs
+
+- name: Remove very old log files (actual cleanup)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ logs_to_delete.files }}"
+  when:
+    - not cleanup_dry_run | bool
+    - log_dir.stat.exists
+    - logs_to_delete.matched > 0
+  register: logs_removed
+  tags:
+    - cleanup
+    - logs
+
+- name: Display log cleanup results (actual cleanup)
+  ansible.builtin.debug:
+    msg:
+      - "=== /var/log Cleanup Results ==="
+      - "Log files compressed: {{ logs_to_compress.matched | default(0) }}"
+      - "Log files deleted: {{ logs_to_delete.matched | default(0) }}"
+      - "Space freed: {{ (logs_delete_size | default(0) | int / 1024 / 1024) | round(2) }} MB"
+  when:
+    - not cleanup_dry_run | bool
+    - log_dir.stat.exists
+  tags:
+    - cleanup
+    - logs
+    - reporting
+
+- name: Update cleanup statistics
+  ansible.builtin.set_fact:
+    cleanup_stats: >-
+      {{
+        cleanup_stats | default({}) | combine({
+          'logs': {
+            'files_compressed': logs_to_compress.matched | default(0),
+            'files_deleted': logs_to_delete.matched | default(0),
+            'space_freed_mb': (logs_delete_size | default(0) | int / 1024 / 1024) | round(2),
+            'dry_run': cleanup_dry_run | bool
+          }
+        })
+      }}
+  tags:
+    - cleanup
+    - logs
+
+# Made with Bob

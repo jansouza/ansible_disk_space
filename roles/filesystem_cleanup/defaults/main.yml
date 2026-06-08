@@ -1,0 +1,106 @@
+---
+# Default variables for filesystem_cleanup role
+# These can be overridden at the playbook, inventory, or command line level
+
+# ============================================================================
+# SAFETY: Dry-run mode is ENABLED by default
+# Set to false to perform actual cleanup operations
+# ============================================================================
+cleanup_dry_run: true
+
+# ============================================================================
+# Cleanup Operation Toggles
+# ============================================================================
+cleanup_tmp_enabled: true
+cleanup_logs_enabled: true
+cleanup_package_cache_enabled: true
+cleanup_journals_enabled: true
+
+# ============================================================================
+# /tmp Cleanup Settings
+# ============================================================================
+
+# Age threshold for files in /tmp (days)
+tmp_file_age_days: 7
+
+# Patterns to exclude from /tmp cleanup (system-critical files)
+tmp_exclude_patterns:
+  - ".X*"
+  - ".ICE-unix"
+  - "systemd-*"
+  - ".X11-unix"
+  - ".font-unix"
+  - "ssh-*"
+  - ".Test-unix"
+
+# Additional paths in /tmp to exclude (full paths)
+tmp_exclude_paths:
+  - "/tmp/.X11-unix"
+  - "/tmp/.ICE-unix"
+  - "/tmp/.font-unix"
+  - "/tmp/.Test-unix"
+
+# ============================================================================
+# /var/log Cleanup Settings
+# ============================================================================
+
+# Age threshold for deleting old log files (days)
+log_file_age_days: 30
+
+# Age threshold for compressing log files (days)
+log_compress_age_days: 7
+
+# Patterns to exclude from log cleanup
+log_exclude_patterns:
+  - "*.gz"
+  - "*.bz2"
+  - "*.xz"
+  - "lastlog"
+  - "wtmp"
+  - "btmp"
+  - "faillog"
+  - "tallylog"
+
+# Log file patterns to target for cleanup
+log_file_patterns:
+  - "*.log"
+  - "*.log.*"
+  - "syslog*"
+  - "messages*"
+  - "kern.log*"
+  - "auth.log*"
+
+# ============================================================================
+# Package Cache Settings
+# ============================================================================
+
+# Number of package versions to keep (0 = clean all)
+package_cache_keep_latest: 1
+
+# Whether to run autoremove for unused packages
+package_autoremove_enabled: true
+
+# ============================================================================
+# Systemd Journal Settings
+# ============================================================================
+
+# Maximum size for journal logs
+journal_max_size: "500M"
+
+# Maximum age for journal logs
+journal_max_time: "30d"
+
+# Whether to verify journal integrity before cleanup
+journal_verify_before_cleanup: true
+
+# ============================================================================
+# Reporting Settings
+# ============================================================================
+
+# Whether to display detailed cleanup reports
+show_detailed_reports: true
+
+# Whether to calculate space freed
+calculate_space_freed: true
+
+# Made with Bob

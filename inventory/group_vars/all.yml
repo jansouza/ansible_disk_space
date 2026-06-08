@@ -1,0 +1,108 @@
+---
+# Global variables for disk space management
+# These variables apply to all hosts unless overridden at group or host level
+
+# ============================================================================
+# Disk Verification Settings
+# ============================================================================
+
+# Threshold for warning status (percentage of disk usage)
+disk_space_warning_threshold: 80
+
+# Threshold for critical status (percentage of disk usage)
+disk_space_critical_threshold: 90
+
+# Filesystems to monitor (will check all by default if not specified)
+monitored_filesystems:
+  - /
+  - /tmp
+  - /var
+  - /home
+
+# Whether to fail the playbook on critical threshold
+fail_on_critical: false
+
+# ============================================================================
+# Cleanup Behavior Settings
+# ============================================================================
+
+# IMPORTANT: Dry-run mode is enabled by default for safety
+# Set to false to perform actual cleanup operations
+cleanup_dry_run: true
+
+# Enable/disable specific cleanup operations
+cleanup_tmp_enabled: true
+cleanup_logs_enabled: true
+cleanup_package_cache_enabled: true
+cleanup_journals_enabled: true
+
+# ============================================================================
+# /tmp Cleanup Settings
+# ============================================================================
+
+# Age threshold for files in /tmp (days)
+tmp_file_age_days: 7
+
+# Patterns to exclude from /tmp cleanup (system-critical files)
+tmp_exclude_patterns:
+  - ".X*"
+  - ".ICE-unix"
+  - "systemd-*"
+  - ".X11-unix"
+  - ".font-unix"
+  - "ssh-*"
+
+# ============================================================================
+# /var/log Cleanup Settings
+# ============================================================================
+
+# Age threshold for deleting old log files (days)
+log_file_age_days: 30
+
+# Age threshold for compressing log files (days)
+log_compress_age_days: 7
+
+# Patterns to exclude from log cleanup
+log_exclude_patterns:
+  - "*.gz"
+  - "*.bz2"
+  - "*.xz"
+  - "lastlog"
+  - "wtmp"
+  - "btmp"
+  - "faillog"
+
+# ============================================================================
+# Package Cache Settings
+# ============================================================================
+
+# Number of package versions to keep (0 = clean all)
+package_cache_keep_latest: 1
+
+# Whether to run autoremove for unused packages
+package_autoremove_enabled: true
+
+# ============================================================================
+# Systemd Journal Settings
+# ============================================================================
+
+# Maximum size for journal logs
+journal_max_size: "500M"
+
+# Maximum age for journal logs
+journal_max_time: "30d"
+
+# ============================================================================
+# Reporting Settings
+# ============================================================================
+
+# Whether to display detailed cleanup reports
+show_detailed_reports: true
+
+# Whether to save cleanup reports to file
+save_reports_to_file: false
+
+# Report file location (if save_reports_to_file is true)
+report_file_path: "/var/log/ansible_disk_cleanup_report.log"
+
+# Made with Bob

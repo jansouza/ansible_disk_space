@@ -1,0 +1,128 @@
+---
+# Playbook: Verify Disk Space Usage
+# 
+# Purpose: Check disk space usage on target systems and report on filesystems
+#          that need attention. This is a read-only operation that makes no
+#          changes to the system.
+#
+# Usage:
+#   # Check all hosts
+#   ansible-playbook playbooks/verify_disk_space.yml
+#
+#   # Check specific hosts or groups
+#   ansible-playbook playbooks/verify_disk_space.yml -l webservers
+#   ansible-playbook playbooks/verify_disk_space.yml -l web01.example.com
+#
+#   # Override thresholds
+#   ansible-playbook playbooks/verify_disk_space.yml -e "disk_space_warning_threshold=85"
+#   ansible-playbook playbooks/verify_disk_space.yml -e "disk_space_critical_threshold=95"
+#
+#   # Fail on critical threshold
+#   ansible-playbook playbooks/verify_disk_space.yml -e "fail_on_critical=true"
+#
+# Tags:
+#   - verification: Run verification tasks
+#   - reporting: Display reports only
+
+- name: Verify Disk Space Usage
+  hosts: all
+  become: true
+  gather_facts: true
+  
+  vars:
+    # These can be overridden via command line or inventory
+    # disk_space_warning_threshold: 80
+    # disk_space_critical_threshold: 90
+    # fail_on_critical: false
+  
+  pre_tasks:
+    - name: Display playbook information
+      ansible.builtin.debug:
+        msg:
+          - "=== Disk Space Verification Playbook ==="
+          - "Target hosts: {{ ansible_play_hosts | length }}"
+          - "Warning threshold: {{ disk_space_warning_threshold }}%"
+          - "Critical threshold: {{ disk_space_critical_threshold }}%"
+          - "Fail on critical: {{ fail_on_critical }}"
+      run_once: true
+      tags:
+        - always
+  
+  roles:
+    - role: disk_verification
+      tags:
+        - verification
+  
+  post_tasks:
+    - name: Aggregate results across all hosts
+      ansible.builtin.set_fact:
+        all_hosts_status: >-
+          {{
+            ansible_play_hosts |
+            map('extract', hostvars, 'disk_space_status') |
+            list
+          }}
+      run_once: true
+      delegate_to: localhost
+      tags:
+        - reporting
+    
+    - name: Count hosts by status
+      ansible.builtin.set_fact:
+        hosts_ok: "{{ all_hosts_status | select('equalto', 'ok') | list | length }}"
+        hosts_warning: "{{ all_hosts_status | select('equalto', 'warning') | list | length }}"
+        hosts_critical: "{{ all_hosts_status | select('equalto', 'critical') | list | length }}"
+      run_once: true
+      delegate_to: localhost
+      tags:
+        - reporting
+    
+    - name: Display overall verification summary
+      ansible.builtin.debug:
+        msg:
+          - "=== Overall Disk Space Verification Summary ==="
+          - "Total hosts checked: {{ ansible_play_hosts | length }}"
+          - "Hosts OK: {{ hosts_ok }}"
+          - "Hosts at Warning level: {{ hosts_warning }}"
+          - "Hosts at Critical level: {{ hosts_critical }}"
+          - ""
+          - "{% if hosts_critical | int > 0 %}⚠️  CRITICAL: {{ hosts_critical }} host(s) require immediate attention!{% endif %}"
+          - "{% if hosts_warning | int > 0 %}⚠️  WARNING: {{ hosts_warning }} host(s) should be monitored closely.{% endif %}"
+          - "{% if hosts_ok | int == ansible_play_hosts | length %}✓ All hosts are within acceptable disk usage thresholds.{% endif %}"
+      run_once: true
+      delegate_to: localhost
+      tags:
+        - reporting
+    
+    - name: List hosts requiring attention
+      ansible.builtin.debug:
+        msg:
+          - "Host: {{ item }}"
+          - "Status: {{ hostvars[item].disk_space_status | upper }}"
+          - "Filesystems needing cleanup: {{ hostvars[item].filesystems_needing_cleanup | length }}"
+      loop: "{{ ansible_play_hosts }}"
+      when: hostvars[item].disk_space_status in ['warning', 'critical']
+      run_once: true
+      delegate_to: localhost
+      tags:
+        - reporting
+    
+    - name: Recommend next steps
+      ansible.builtin.debug:
+        msg:
+          - "=== Recommended Next Steps ==="
+          - "{% if hosts_critical | int > 0 or hosts_warning | int > 0 %}"
+          - "1. Review the detailed reports above for each affected host"
+          - "2. Run cleanup in dry-run mode to see what would be cleaned:"
+          - "   ansible-playbook playbooks/remediate_disk_space.yml -l <affected_hosts>"
+          - "3. If satisfied with dry-run results, perform actual cleanup:"
+          - "   ansible-playbook playbooks/remediate_disk_space.yml -l <affected_hosts> -e 'cleanup_dry_run=false'"
+          - "{% else %}"
+          - "No action required. All systems are within acceptable thresholds."
+          - "{% endif %}"
+      run_once: true
+      delegate_to: localhost
+      tags:
+        - reporting
+
+# Made with Bob

@@ -1,0 +1,25 @@
+---
+# Default variables for disk_verification role
+# These can be overridden at the playbook, inventory, or command line level
+
+# Threshold for warning status (percentage of disk usage)
+disk_space_warning_threshold: 80
+
+# Threshold for critical status (percentage of disk usage)
+disk_space_critical_threshold: 90
+
+# Filesystems to monitor
+# If empty, all mounted filesystems will be checked
+monitored_filesystems: []
+
+# Whether to fail the playbook when critical threshold is exceeded
+fail_on_critical: false
+
+# Whether to display detailed filesystem information
+show_detailed_info: true
+
+# Minimum size threshold for filesystems to monitor (in GB)
+# Filesystems smaller than this will be skipped
+min_filesystem_size_gb: 1
+
+# Made with Bob

@@ -1,0 +1,169 @@
+---
+# Main tasks for disk_verification role
+# This role checks disk space usage and reports on filesystems that need attention
+
+- name: Gather disk space facts
+  ansible.builtin.setup:
+    gather_subset:
+      - hardware
+      - mounts
+  tags:
+    - verification
+    - facts
+
+- name: Get detailed disk usage information
+  ansible.builtin.command: df -h
+  register: df_output
+  changed_when: false
+  tags:
+    - verification
+
+- name: Get disk usage in machine-readable format
+  ansible.builtin.command: df -B1
+  register: df_bytes
+  changed_when: false
+  tags:
+    - verification
+
+- name: Parse filesystem usage
+  ansible.builtin.set_fact:
+    filesystem_usage: >-
+      {{
+        df_bytes.stdout_lines[1:] | map('regex_replace', '^\s+', '') |
+        map('split', ' ') |
+        map('select') |
+        list
+      }}
+  tags:
+    - verification
+
+- name: Build filesystem information list
+  ansible.builtin.set_fact:
+    filesystems_info: >-
+      {{
+        filesystems_info | default([]) + [{
+          'filesystem': item[0],
+          'size_bytes': item[1] | int,
+          'used_bytes': item[2] | int,
+          'available_bytes': item[3] | int,
+          'use_percent': item[4] | regex_replace('%', '') | int,
+          'mountpoint': item[5]
+        }]
+      }}
+  loop: "{{ filesystem_usage }}"
+  when:
+    - item | length >= 6
+    - (monitored_filesystems | length == 0) or (item[5] in monitored_filesystems)
+    - (item[1] | int / 1024 / 1024 / 1024) >= min_filesystem_size_gb
+  tags:
+    - verification
+
+- name: Identify filesystems needing attention
+  ansible.builtin.set_fact:
+    filesystems_warning: >-
+      {{
+        filesystems_info | default([]) |
+        selectattr('use_percent', '>=', disk_space_warning_threshold) |
+        selectattr('use_percent', '<', disk_space_critical_threshold) |
+        list
+      }}
+    filesystems_critical: >-
+      {{
+        filesystems_info | default([]) |
+        selectattr('use_percent', '>=', disk_space_critical_threshold) |
+        list
+      }}
+  tags:
+    - verification
+
+- name: Determine overall disk space status
+  ansible.builtin.set_fact:
+    disk_space_status: >-
+      {{
+        'critical' if (filesystems_critical | length > 0)
+        else 'warning' if (filesystems_warning | length > 0)
+        else 'ok'
+      }}
+    filesystems_needing_cleanup: >-
+      {{ (filesystems_warning | default([]) + filesystems_critical | default([])) | unique }}
+  tags:
+    - verification
+
+- name: Display disk space summary
+  ansible.builtin.debug:
+    msg:
+      - "=== Disk Space Verification Summary ==="
+      - "Overall Status: {{ disk_space_status | upper }}"
+      - "Total Filesystems Checked: {{ filesystems_info | default([]) | length }}"
+      - "Filesystems at Warning Level ({{ disk_space_warning_threshold }}%+): {{ filesystems_warning | length }}"
+      - "Filesystems at Critical Level ({{ disk_space_critical_threshold }}%+): {{ filesystems_critical | length }}"
+      - ""
+      - "Thresholds:"
+      - "  Warning: {{ disk_space_warning_threshold }}%"
+      - "  Critical: {{ disk_space_critical_threshold }}%"
+  tags:
+    - verification
+    - reporting
+
+- name: Display detailed filesystem information
+  ansible.builtin.debug:
+    msg:
+      - "Filesystem: {{ item.filesystem }}"
+      - "Mountpoint: {{ item.mountpoint }}"
+      - "Size: {{ (item.size_bytes / 1024 / 1024 / 1024) | round(2) }} GB"
+      - "Used: {{ (item.used_bytes / 1024 / 1024 / 1024) | round(2) }} GB ({{ item.use_percent }}%)"
+      - "Available: {{ (item.available_bytes / 1024 / 1024 / 1024) | round(2) }} GB"
+      - "Status: {{ 'CRITICAL' if item.use_percent >= disk_space_critical_threshold else 'WARNING' if item.use_percent >= disk_space_warning_threshold else 'OK' }}"
+      - "---"
+  loop: "{{ filesystems_info | default([]) }}"
+  when: show_detailed_info
+  tags:
+    - verification
+    - reporting
+
+- name: Display filesystems needing cleanup
+  ansible.builtin.debug:
+    msg:
+      - "=== Filesystems Requiring Attention ==="
+      - "{{ item.mountpoint }}: {{ item.use_percent }}% used ({{ (item.available_bytes / 1024 / 1024 / 1024) | round(2) }} GB available)"
+  loop: "{{ filesystems_needing_cleanup | default([]) }}"
+  when: filesystems_needing_cleanup | length > 0
+  tags:
+    - verification
+    - reporting
+
+- name: Display OK message when no issues found
+  ansible.builtin.debug:
+    msg: "All monitored filesystems are within acceptable usage thresholds."
+  when: disk_space_status == 'ok'
+  tags:
+    - verification
+    - reporting
+
+- name: Fail if critical threshold exceeded and fail_on_critical is true
+  ansible.builtin.fail:
+    msg: >-
+      Critical disk space threshold exceeded on {{ filesystems_critical | length }} filesystem(s).
+      Immediate action required!
+  when:
+    - fail_on_critical | bool
+    - filesystems_critical | length > 0
+  tags:
+    - verification
+
+- name: Save verification results to fact
+  ansible.builtin.set_fact:
+    disk_verification_results:
+      status: "{{ disk_space_status }}"
+      timestamp: "{{ ansible_date_time.iso8601 }}"
+      filesystems_checked: "{{ filesystems_info | default([]) | length }}"
+      filesystems_warning: "{{ filesystems_warning | length }}"
+      filesystems_critical: "{{ filesystems_critical | length }}"
+      filesystems_needing_cleanup: "{{ filesystems_needing_cleanup | default([]) }}"
+      thresholds:
+        warning: "{{ disk_space_warning_threshold }}"
+        critical: "{{ disk_space_critical_threshold }}"
+  tags:
+    - verification
+
+# Made with Bob

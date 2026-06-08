@@ -1,0 +1,148 @@
+---
+# Tasks for cleaning up /tmp directory
+# Removes files older than the specified age threshold
+
+- name: Check if /tmp directory exists
+  ansible.builtin.stat:
+    path: /tmp
+  register: tmp_dir
+  tags:
+    - cleanup
+    - tmp
+
+- name: Find old files in /tmp
+  ansible.builtin.find:
+    paths: /tmp
+    age: "{{ tmp_file_age_days }}d"
+    recurse: yes
+    file_type: file
+    excludes: "{{ tmp_exclude_patterns }}"
+  register: tmp_old_files
+  when: tmp_dir.stat.exists
+  tags:
+    - cleanup
+    - tmp
+
+- name: Find old directories in /tmp
+  ansible.builtin.find:
+    paths: /tmp
+    age: "{{ tmp_file_age_days }}d"
+    recurse: no
+    file_type: directory
+    excludes: "{{ tmp_exclude_patterns }}"
+  register: tmp_old_dirs
+  when: tmp_dir.stat.exists
+  tags:
+    - cleanup
+    - tmp
+
+- name: Calculate space to be freed from /tmp files
+  ansible.builtin.set_fact:
+    tmp_files_size: >-
+      {{
+        tmp_old_files.files |
+        map(attribute='size') |
+        sum
+      }}
+  when:
+    - tmp_dir.stat.exists
+    - tmp_old_files.matched > 0
+  tags:
+    - cleanup
+    - tmp
+
+- name: Display /tmp cleanup summary (dry-run)
+  ansible.builtin.debug:
+    msg:
+      - "=== /tmp Cleanup Summary (DRY-RUN) ==="
+      - "Files to be deleted: {{ tmp_old_files.matched | default(0) }}"
+      - "Directories to be deleted: {{ tmp_old_dirs.matched | default(0) }}"
+      - "Space to be freed: {{ (tmp_files_size | default(0) | int / 1024 / 1024) | round(2) }} MB"
+      - "Age threshold: {{ tmp_file_age_days }} days"
+      - ""
+      - "NOTE: This is a DRY-RUN. No files will be deleted."
+      - "To perform actual cleanup, set cleanup_dry_run=false"
+  when:
+    - cleanup_dry_run | bool
+    - tmp_dir.stat.exists
+  tags:
+    - cleanup
+    - tmp
+    - reporting
+
+- name: Display files that would be deleted (dry-run, first 10)
+  ansible.builtin.debug:
+    msg: "Would delete: {{ item.path }}"
+  loop: "{{ tmp_old_files.files[:10] }}"
+  when:
+    - cleanup_dry_run | bool
+    - tmp_old_files.matched > 0
+  tags:
+    - cleanup
+    - tmp
+    - reporting
+
+- name: Remove old files from /tmp (actual cleanup)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ tmp_old_files.files }}"
+  when:
+    - not cleanup_dry_run | bool
+    - tmp_dir.stat.exists
+    - tmp_old_files.matched > 0
+    - item.path not in tmp_exclude_paths
+  register: tmp_files_removed
+  tags:
+    - cleanup
+    - tmp
+
+- name: Remove old empty directories from /tmp (actual cleanup)
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ tmp_old_dirs.files }}"
+  when:
+    - not cleanup_dry_run | bool
+    - tmp_dir.stat.exists
+    - tmp_old_dirs.matched > 0
+    - item.path not in tmp_exclude_paths
+  register: tmp_dirs_removed
+  ignore_errors: yes
+  tags:
+    - cleanup
+    - tmp
+
+- name: Display /tmp cleanup results (actual cleanup)
+  ansible.builtin.debug:
+    msg:
+      - "=== /tmp Cleanup Results ==="
+      - "Files deleted: {{ tmp_old_files.matched | default(0) }}"
+      - "Directories deleted: {{ tmp_old_dirs.matched | default(0) }}"
+      - "Space freed: {{ (tmp_files_size | default(0) | int / 1024 / 1024) | round(2) }} MB"
+  when:
+    - not cleanup_dry_run | bool
+    - tmp_dir.stat.exists
+  tags:
+    - cleanup
+    - tmp
+    - reporting
+
+- name: Update cleanup statistics
+  ansible.builtin.set_fact:
+    cleanup_stats: >-
+      {{
+        cleanup_stats | default({}) | combine({
+          'tmp': {
+            'files_removed': tmp_old_files.matched | default(0),
+            'dirs_removed': tmp_old_dirs.matched | default(0),
+            'space_freed_mb': (tmp_files_size | default(0) | int / 1024 / 1024) | round(2),
+            'dry_run': cleanup_dry_run | bool
+          }
+        })
+      }}
+  tags:
+    - cleanup
+    - tmp
+
+# Made with Bob

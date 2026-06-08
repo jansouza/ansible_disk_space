@@ -1,0 +1,368 @@
+---
+# Test Playbook for Disk Space Management
+#
+# This playbook tests the disk_verification and filesystem_cleanup roles
+# by creating test files, running cleanup operations, and validating results.
+#
+# Usage:
+#   ansible-playbook tests/test_playbook.yml
+#
+# Requirements:
+#   - Test target hosts defined in inventory
+#   - sudo/root access on test hosts
+#   - Test hosts should be non-production systems
+
+- name: Test Disk Space Management Roles
+  hosts: all
+  become: true
+  gather_facts: true
+  
+  vars:
+    test_tmp_dir: "/tmp/ansible_test_cleanup"
+    test_file_count: 10
+    test_file_size_mb: 1
+  
+  tasks:
+    - name: Display test information
+      ansible.builtin.debug:
+        msg:
+          - "=== Disk Space Management Test Suite ==="
+          - "Target host: {{ inventory_hostname }}"
+          - "OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - "Test directory: {{ test_tmp_dir }}"
+          - "Test files to create: {{ test_file_count }}"
+      tags:
+        - always
+    
+    # ========================================================================
+    # Test 1: Disk Verification Role
+    # ========================================================================
+    
+    - name: "TEST 1: Run disk verification role"
+      ansible.builtin.include_role:
+        name: disk_verification
+      tags:
+        - test_verification
+    
+    - name: "TEST 1: Verify disk_space_status fact is set"
+      ansible.builtin.assert:
+        that:
+          - disk_space_status is defined
+          - disk_space_status in ['ok', 'warning', 'critical']
+        success_msg: "✓ TEST 1 PASSED: Disk verification completed successfully"
+        fail_msg: "✗ TEST 1 FAILED: Disk verification did not set expected facts"
+      tags:
+        - test_verification
+    
+    - name: "TEST 1: Verify filesystems_info fact is set"
+      ansible.builtin.assert:
+        that:
+          - filesystems_info is defined
+          - filesystems_info | length > 0
+        success_msg: "✓ TEST 1 PASSED: Filesystem information collected"
+        fail_msg: "✗ TEST 1 FAILED: No filesystem information collected"
+      tags:
+        - test_verification
+    
+    # ========================================================================
+    # Test 2: Create Test Files
+    # ========================================================================
+    
+    - name: "TEST 2: Create test directory"
+      ansible.builtin.file:
+        path: "{{ test_tmp_dir }}"
+        state: directory
+        mode: '0755'
+      tags:
+        - test_cleanup
+    
+    - name: "TEST 2: Create old test files in /tmp"
+      ansible.builtin.shell: |
+        for i in $(seq 1 {{ test_file_count }}); do
+          dd if=/dev/zero of="{{ test_tmp_dir }}/test_file_$i" bs=1M count={{ test_file_size_mb }} 2>/dev/null
+          touch -d "10 days ago" "{{ test_tmp_dir }}/test_file_$i"
+        done
+      args:
+        creates: "{{ test_tmp_dir }}/test_file_1"
+      tags:
+        - test_cleanup
+    
+    - name: "TEST 2: Verify test files were created"
+      ansible.builtin.find:
+        paths: "{{ test_tmp_dir }}"
+        patterns: "test_file_*"
+      register: test_files_created
+      tags:
+        - test_cleanup
+    
+    - name: "TEST 2: Assert test files exist"
+      ansible.builtin.assert:
+        that:
+          - test_files_created.matched == test_file_count
+        success_msg: "✓ TEST 2 PASSED: {{ test_file_count }} test files created"
+        fail_msg: "✗ TEST 2 FAILED: Expected {{ test_file_count }} files, found {{ test_files_created.matched }}"
+      tags:
+        - test_cleanup
+    
+    # ========================================================================
+    # Test 3: Dry-Run Cleanup
+    # ========================================================================
+    
+    - name: "TEST 3: Run cleanup in dry-run mode"
+      ansible.builtin.include_role:
+        name: filesystem_cleanup
+      vars:
+        cleanup_dry_run: true
+        cleanup_logs_enabled: false
+        cleanup_package_cache_enabled: false
+        cleanup_journals_enabled: false
+      tags:
+        - test_cleanup
+    
+    - name: "TEST 3: Verify test files still exist after dry-run"
+      ansible.builtin.find:
+        paths: "{{ test_tmp_dir }}"
+        patterns: "test_file_*"
+      register: test_files_after_dryrun
+      tags:
+        - test_cleanup
+    
+    - name: "TEST 3: Assert files not deleted in dry-run"
+      ansible.builtin.assert:
+        that:
+          - test_files_after_dryrun.matched == test_file_count
+        success_msg: "✓ TEST 3 PASSED: Dry-run mode did not delete files"
+        fail_msg: "✗ TEST 3 FAILED: Dry-run mode deleted files (should not happen)"
+      tags:
+        - test_cleanup
+    
+    # ========================================================================
+    # Test 4: Actual Cleanup
+    # ========================================================================
+    
+    - name: "TEST 4: Run actual cleanup"
+      ansible.builtin.include_role:
+        name: filesystem_cleanup
+      vars:
+        cleanup_dry_run: false
+        cleanup_logs_enabled: false
+        cleanup_package_cache_enabled: false
+        cleanup_journals_enabled: false
+        tmp_file_age_days: 7
+      tags:
+        - test_cleanup
+    
+    - name: "TEST 4: Verify test files were deleted"
+      ansible.builtin.find:
+        paths: "{{ test_tmp_dir }}"
+        patterns: "test_file_*"
+      register: test_files_after_cleanup
+      tags:
+        - test_cleanup
+    
+    - name: "TEST 4: Assert files were deleted"
+      ansible.builtin.assert:
+        that:
+          - test_files_after_cleanup.matched == 0
+        success_msg: "✓ TEST 4 PASSED: Cleanup successfully deleted old files"
+        fail_msg: "✗ TEST 4 FAILED: Cleanup did not delete files as expected"
+      tags:
+        - test_cleanup
+    
+    # ========================================================================
+    # Test 5: Idempotency Check
+    # ========================================================================
+    
+    - name: "TEST 5: Run cleanup again (idempotency test)"
+      ansible.builtin.include_role:
+        name: filesystem_cleanup
+      vars:
+        cleanup_dry_run: false
+        cleanup_logs_enabled: false
+        cleanup_package_cache_enabled: false
+        cleanup_journals_enabled: false
+      register: second_cleanup
+      tags:
+        - test_idempotency
+    
+    - name: "TEST 5: Verify no changes on second run"
+      ansible.builtin.assert:
+        that:
+          - cleanup_stats.tmp.files_removed | default(0) == 0
+        success_msg: "✓ TEST 5 PASSED: Role is idempotent (no changes on second run)"
+        fail_msg: "✗ TEST 5 FAILED: Role made changes on second run (not idempotent)"
+      tags:
+        - test_idempotency
+    
+    # ========================================================================
+    # Test 6: Package Cache Cleanup (OS-specific)
+    # ========================================================================
+    
+    - name: "TEST 6: Test package cache cleanup (dry-run)"
+      ansible.builtin.include_role:
+        name: filesystem_cleanup
+      vars:
+        cleanup_dry_run: true
+        cleanup_tmp_enabled: false
+        cleanup_logs_enabled: false
+        cleanup_package_cache_enabled: true
+        cleanup_journals_enabled: false
+      tags:
+        - test_package_cache
+    
+    - name: "TEST 6: Verify package manager was detected"
+      ansible.builtin.assert:
+        that:
+          - cleanup_stats.package_cache.package_manager is defined
+          - cleanup_stats.package_cache.package_manager in ['apt', 'yum', 'dnf']
+        success_msg: "✓ TEST 6 PASSED: Package manager detected ({{ cleanup_stats.package_cache.package_manager }})"
+        fail_msg: "✗ TEST 6 FAILED: Package manager not properly detected"
+      tags:
+        - test_package_cache
+    
+    # ========================================================================
+    # Test 7: Journal Cleanup (if available)
+    # ========================================================================
+    
+    - name: "TEST 7: Check if journalctl is available"
+      ansible.builtin.command: which journalctl
+      register: journalctl_available
+      changed_when: false
+      failed_when: false
+      tags:
+        - test_journals
+    
+    - name: "TEST 7: Test journal cleanup (dry-run)"
+      ansible.builtin.include_role:
+        name: filesystem_cleanup
+      vars:
+        cleanup_dry_run: true
+        cleanup_tmp_enabled: false
+        cleanup_logs_enabled: false
+        cleanup_package_cache_enabled: false
+        cleanup_journals_enabled: true
+      when: journalctl_available.rc == 0
+      tags:
+        - test_journals
+    
+    - name: "TEST 7: Verify journal cleanup stats"
+      ansible.builtin.assert:
+        that:
+          - cleanup_stats.journals.available is defined
+        success_msg: "✓ TEST 7 PASSED: Journal cleanup executed"
+        fail_msg: "✗ TEST 7 FAILED: Journal cleanup did not execute properly"
+      when: journalctl_available.rc == 0
+      tags:
+        - test_journals
+    
+    - name: "TEST 7: Skip journal test (journalctl not available)"
+      ansible.builtin.debug:
+        msg: "⊘ TEST 7 SKIPPED: journalctl not available on this system"
+      when: journalctl_available.rc != 0
+      tags:
+        - test_journals
+    
+    # ========================================================================
+    # Test 8: Integration Test (Verification + Cleanup)
+    # ========================================================================
+    
+    - name: "TEST 8: Create new test files for integration test"
+      ansible.builtin.shell: |
+        for i in $(seq 1 5); do
+          dd if=/dev/zero of="{{ test_tmp_dir }}/integration_test_$i" bs=1M count=1 2>/dev/null
+          touch -d "15 days ago" "{{ test_tmp_dir }}/integration_test_$i"
+        done
+      tags:
+        - test_integration
+    
+    - name: "TEST 8: Run verification before cleanup"
+      ansible.builtin.include_role:
+        name: disk_verification
+      tags:
+        - test_integration
+    
+    - name: "TEST 8: Save pre-cleanup status"
+      ansible.builtin.set_fact:
+        status_before_integration: "{{ disk_space_status }}"
+      tags:
+        - test_integration
+    
+    - name: "TEST 8: Run cleanup"
+      ansible.builtin.include_role:
+        name: filesystem_cleanup
+      vars:
+        cleanup_dry_run: false
+        cleanup_logs_enabled: false
+        cleanup_package_cache_enabled: false
+        cleanup_journals_enabled: false
+      tags:
+        - test_integration
+    
+    - name: "TEST 8: Run verification after cleanup"
+      ansible.builtin.include_role:
+        name: disk_verification
+      tags:
+        - test_integration
+    
+    - name: "TEST 8: Verify integration test completed"
+      ansible.builtin.assert:
+        that:
+          - status_before_integration is defined
+          - disk_space_status is defined
+        success_msg: "✓ TEST 8 PASSED: Integration test completed (before: {{ status_before_integration }}, after: {{ disk_space_status }})"
+        fail_msg: "✗ TEST 8 FAILED: Integration test did not complete properly"
+      tags:
+        - test_integration
+    
+    # ========================================================================
+    # Cleanup Test Artifacts
+    # ========================================================================
+    
+    - name: "CLEANUP: Remove test directory"
+      ansible.builtin.file:
+        path: "{{ test_tmp_dir }}"
+        state: absent
+      tags:
+        - always
+    
+    - name: "CLEANUP: Verify test directory removed"
+      ansible.builtin.stat:
+        path: "{{ test_tmp_dir }}"
+      register: test_dir_check
+      tags:
+        - always
+    
+    - name: "CLEANUP: Assert test directory removed"
+      ansible.builtin.assert:
+        that:
+          - not test_dir_check.stat.exists
+        success_msg: "✓ CLEANUP: Test artifacts removed"
+        fail_msg: "✗ CLEANUP: Failed to remove test artifacts"
+      tags:
+        - always
+    
+    # ========================================================================
+    # Test Summary
+    # ========================================================================
+    
+    - name: Display test summary
+      ansible.builtin.debug:
+        msg:
+          - "=== Test Suite Summary ==="
+          - "Host: {{ inventory_hostname }}"
+          - "OS: {{ ansible_distribution }} {{ ansible_distribution_version }}"
+          - ""
+          - "✓ TEST 1: Disk verification role"
+          - "✓ TEST 2: Test file creation"
+          - "✓ TEST 3: Dry-run mode safety"
+          - "✓ TEST 4: Actual cleanup functionality"
+          - "✓ TEST 5: Idempotency"
+          - "✓ TEST 6: Package cache cleanup"
+          - "{{ '✓' if journalctl_available.rc == 0 else '⊘' }} TEST 7: Journal cleanup {{ '(skipped - no journalctl)' if journalctl_available.rc != 0 else '' }}"
+          - "✓ TEST 8: Integration test"
+          - ""
+          - "All tests completed successfully!"
+      tags:
+        - always
+
+# Made with Bob

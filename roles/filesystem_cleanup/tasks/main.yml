@@ -1,0 +1,153 @@
+---
+# Main tasks for filesystem_cleanup role
+# Orchestrates all cleanup operations based on enabled flags
+
+- name: Display cleanup mode
+  ansible.builtin.debug:
+    msg:
+      - "=== Filesystem Cleanup Starting ==="
+      - "Mode: {{ 'DRY-RUN (no changes will be made)' if cleanup_dry_run else 'ACTUAL CLEANUP (changes will be made)' }}"
+      - "Enabled operations:"
+      - "  - /tmp cleanup: {{ cleanup_tmp_enabled }}"
+      - "  - /var/log cleanup: {{ cleanup_logs_enabled }}"
+      - "  - Package cache cleanup: {{ cleanup_package_cache_enabled }}"
+      - "  - Journal cleanup: {{ cleanup_journals_enabled }}"
+  tags:
+    - cleanup
+    - always
+
+- name: Initialize cleanup statistics
+  ansible.builtin.set_fact:
+    cleanup_stats: {}
+  tags:
+    - cleanup
+    - always
+
+- name: Warn if running in actual cleanup mode
+  ansible.builtin.pause:
+    prompt: |
+      
+      ⚠️  WARNING: You are about to perform ACTUAL cleanup operations!
+      
+      This will DELETE files from the target systems.
+      
+      Press CTRL+C and then 'A' to abort, or press ENTER to continue.
+      
+  when:
+    - not cleanup_dry_run | bool
+    - ansible_check_mode is not defined or not ansible_check_mode
+  tags:
+    - cleanup
+    - always
+
+# ============================================================================
+# /tmp Cleanup
+# ============================================================================
+
+- name: Include /tmp cleanup tasks
+  ansible.builtin.include_tasks: cleanup_tmp.yml
+  when: cleanup_tmp_enabled | bool
+  tags:
+    - cleanup
+    - tmp
+
+# ============================================================================
+# /var/log Cleanup
+# ============================================================================
+
+- name: Include /var/log cleanup tasks
+  ansible.builtin.include_tasks: cleanup_logs.yml
+  when: cleanup_logs_enabled | bool
+  tags:
+    - cleanup
+    - logs
+
+# ============================================================================
+# Package Cache Cleanup
+# ============================================================================
+
+- name: Include package cache cleanup tasks
+  ansible.builtin.include_tasks: cleanup_package_cache.yml
+  when: cleanup_package_cache_enabled | bool
+  tags:
+    - cleanup
+    - cache
+
+# ============================================================================
+# Systemd Journal Cleanup
+# ============================================================================
+
+- name: Include journal cleanup tasks
+  ansible.builtin.include_tasks: cleanup_journals.yml
+  when: cleanup_journals_enabled | bool
+  tags:
+    - cleanup
+    - journals
+
+# ============================================================================
+# Final Summary
+# ============================================================================
+
+- name: Calculate total space freed
+  ansible.builtin.set_fact:
+    total_space_freed_mb: >-
+      {{
+        (cleanup_stats.tmp.space_freed_mb | default(0) | float) +
+        (cleanup_stats.logs.space_freed_mb | default(0) | float)
+      }}
+  when: calculate_space_freed | bool
+  tags:
+    - cleanup
+    - reporting
+
+- name: Display final cleanup summary
+  ansible.builtin.debug:
+    msg:
+      - "=== Filesystem Cleanup Summary ==="
+      - "Mode: {{ 'DRY-RUN' if cleanup_dry_run else 'ACTUAL CLEANUP' }}"
+      - ""
+      - "/tmp Cleanup:"
+      - "  Files removed: {{ cleanup_stats.tmp.files_removed | default(0) }}"
+      - "  Directories removed: {{ cleanup_stats.tmp.dirs_removed | default(0) }}"
+      - "  Space freed: {{ cleanup_stats.tmp.space_freed_mb | default(0) }} MB"
+      - ""
+      - "/var/log Cleanup:"
+      - "  Files compressed: {{ cleanup_stats.logs.files_compressed | default(0) }}"
+      - "  Files deleted: {{ cleanup_stats.logs.files_deleted | default(0) }}"
+      - "  Space freed: {{ cleanup_stats.logs.space_freed_mb | default(0) }} MB"
+      - ""
+      - "Package Cache Cleanup:"
+      - "  Package manager: {{ cleanup_stats.package_cache.package_manager | default('N/A') }}"
+      - "  Cache size before: {{ cleanup_stats.package_cache.cache_size_before | default('N/A') }}"
+      - "  Cache size after: {{ cleanup_stats.package_cache.cache_size_after | default('N/A') }}"
+      - ""
+      - "Journal Cleanup:"
+      - "  Size before: {{ cleanup_stats.journals.size_before | default('N/A') }}"
+      - "  Size after: {{ cleanup_stats.journals.size_after | default('N/A') }}"
+      - "  Max size limit: {{ cleanup_stats.journals.max_size | default('N/A') }}"
+      - "  Max time limit: {{ cleanup_stats.journals.max_time | default('N/A') }}"
+      - ""
+      - "Total Space Freed: {{ total_space_freed_mb | default('N/A') }} MB"
+  when: show_detailed_reports | bool
+  tags:
+    - cleanup
+    - reporting
+    - always
+
+- name: Save cleanup results to fact
+  ansible.builtin.set_fact:
+    filesystem_cleanup_results:
+      timestamp: "{{ ansible_date_time.iso8601 }}"
+      dry_run: "{{ cleanup_dry_run | bool }}"
+      operations_performed:
+        tmp: "{{ cleanup_tmp_enabled | bool }}"
+        logs: "{{ cleanup_logs_enabled | bool }}"
+        package_cache: "{{ cleanup_package_cache_enabled | bool }}"
+        journals: "{{ cleanup_journals_enabled | bool }}"
+      statistics: "{{ cleanup_stats }}"
+      total_space_freed_mb: "{{ total_space_freed_mb | default(0) }}"
+  tags:
+    - cleanup
+    - always
+
+# Made with Bob

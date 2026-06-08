@@ -1,0 +1,229 @@
+---
+# Playbook: Remediate Disk Space Issues
+# 
+# Purpose: Clean up disk space on target systems by removing old temporary files,
+#          compressing/removing old logs, cleaning package caches, and trimming
+#          systemd journals. Includes pre-verification and post-verification.
+#
+# IMPORTANT: Runs in DRY-RUN mode by default for safety!
+#
+# Usage:
+#   # Dry-run mode (default - shows what would be cleaned without making changes)
+#   ansible-playbook playbooks/remediate_disk_space.yml
+#
+#   # Actual cleanup (CAUTION: This will delete files!)
+#   ansible-playbook playbooks/remediate_disk_space.yml -e "cleanup_dry_run=false"
+#
+#   # Target specific hosts
+#   ansible-playbook playbooks/remediate_disk_space.yml -l webservers -e "cleanup_dry_run=false"
+#
+#   # Run specific cleanup operations only
+#   ansible-playbook playbooks/remediate_disk_space.yml --tags tmp
+#   ansible-playbook playbooks/remediate_disk_space.yml --tags logs,cache
+#
+#   # Disable specific cleanup operations
+#   ansible-playbook playbooks/remediate_disk_space.yml -e "cleanup_journals_enabled=false"
+#
+#   # Skip verification (not recommended)
+#   ansible-playbook playbooks/remediate_disk_space.yml --skip-tags verification
+#
+# Tags:
+#   - verification: Pre and post verification tasks
+#   - cleanup: All cleanup operations
+#   - tmp: /tmp cleanup only
+#   - logs: /var/log cleanup only
+#   - cache: Package cache cleanup only
+#   - journals: Systemd journal cleanup only
+#   - reporting: Display reports
+
+- name: Remediate Disk Space Issues
+  hosts: all
+  become: true
+  gather_facts: true
+  
+  vars:
+    # These can be overridden via command line or inventory
+    # cleanup_dry_run: true  # SAFETY: Dry-run enabled by default
+    # cleanup_tmp_enabled: true
+    # cleanup_logs_enabled: true
+    # cleanup_package_cache_enabled: true
+    # cleanup_journals_enabled: true
+  
+  pre_tasks:
+    - name: Display playbook information
+      ansible.builtin.debug:
+        msg:
+          - "=== Disk Space Remediation Playbook ==="
+          - "Target hosts: {{ ansible_play_hosts | length }}"
+          - "Mode: {{ 'DRY-RUN (no changes)' if cleanup_dry_run else '⚠️  ACTUAL CLEANUP (will delete files)' }}"
+          - "Enabled operations:"
+          - "  - /tmp cleanup: {{ cleanup_tmp_enabled }}"
+          - "  - /var/log cleanup: {{ cleanup_logs_enabled }}"
+          - "  - Package cache cleanup: {{ cleanup_package_cache_enabled }}"
+          - "  - Journal cleanup: {{ cleanup_journals_enabled }}"
+      run_once: true
+      tags:
+        - always
+    
+    - name: Verify disk space before cleanup
+      ansible.builtin.include_role:
+        name: disk_verification
+      tags:
+        - verification
+        - always
+    
+    - name: Save pre-cleanup disk status
+      ansible.builtin.set_fact:
+        disk_space_status_before: "{{ disk_space_status }}"
+        filesystems_before: "{{ filesystems_info }}"
+      tags:
+        - verification
+        - always
+    
+    - name: Display pre-cleanup status
+      ansible.builtin.debug:
+        msg:
+          - "Pre-cleanup disk space status: {{ disk_space_status_before | upper }}"
+          - "Filesystems needing attention: {{ filesystems_needing_cleanup | length }}"
+      tags:
+        - verification
+        - reporting
+    
+    - name: Check if cleanup is needed
+      ansible.builtin.debug:
+        msg:
+          - "Disk space status is OK. Cleanup may not be necessary."
+          - "Proceeding anyway as requested..."
+      when: disk_space_status == 'ok'
+      tags:
+        - verification
+  
+  roles:
+    - role: filesystem_cleanup
+      tags:
+        - cleanup
+  
+  post_tasks:
+    - name: Wait for filesystem to settle
+      ansible.builtin.pause:
+        seconds: 5
+      when: not cleanup_dry_run | bool
+      tags:
+        - verification
+    
+    - name: Re-verify disk space after cleanup
+      ansible.builtin.include_role:
+        name: disk_verification
+      vars:
+        show_detailed_info: false
+      tags:
+        - verification
+    
+    - name: Save post-cleanup disk status
+      ansible.builtin.set_fact:
+        disk_space_status_after: "{{ disk_space_status }}"
+        filesystems_after: "{{ filesystems_info }}"
+      tags:
+        - verification
+    
+    - name: Compare disk space before and after
+      ansible.builtin.set_fact:
+        disk_space_improved: "{{ disk_space_status_after != disk_space_status_before }}"
+      tags:
+        - verification
+        - reporting
+    
+    - name: Display remediation results
+      ansible.builtin.debug:
+        msg:
+          - "=== Disk Space Remediation Results ==="
+          - "Mode: {{ 'DRY-RUN' if cleanup_dry_run else 'ACTUAL CLEANUP' }}"
+          - ""
+          - "Status Before: {{ disk_space_status_before | upper }}"
+          - "Status After: {{ disk_space_status_after | upper }}"
+          - "Status Improved: {{ 'Yes' if disk_space_improved else 'No' }}"
+          - ""
+          - "Cleanup Statistics:"
+          - "{{ filesystem_cleanup_results.statistics | to_nice_yaml }}"
+          - ""
+          - "Total Space Freed: {{ filesystem_cleanup_results.total_space_freed_mb | default(0) }} MB"
+      tags:
+        - reporting
+    
+    - name: Aggregate results across all hosts
+      ansible.builtin.set_fact:
+        all_hosts_results: >-
+          {{
+            ansible_play_hosts |
+            map('extract', hostvars) |
+            list
+          }}
+      run_once: true
+      delegate_to: localhost
+      tags:
+        - reporting
+    
+    - name: Calculate total space freed across all hosts
+      ansible.builtin.set_fact:
+        total_space_freed_all_hosts: >-
+          {{
+            ansible_play_hosts |
+            map('extract', hostvars, ['filesystem_cleanup_results', 'total_space_freed_mb']) |
+            map('default', 0) |
+            map('float') |
+            sum
+          }}
+      run_once: true
+      delegate_to: localhost
+      tags:
+        - reporting
+    
+    - name: Display overall remediation summary
+      ansible.builtin.debug:
+        msg:
+          - "=== Overall Remediation Summary ==="
+          - "Total hosts processed: {{ ansible_play_hosts | length }}"
+          - "Mode: {{ 'DRY-RUN' if cleanup_dry_run else 'ACTUAL CLEANUP' }}"
+          - "Total space freed across all hosts: {{ total_space_freed_all_hosts | round(2) }} MB ({{ (total_space_freed_all_hosts / 1024) | round(2) }} GB)"
+          - ""
+          - "Per-host results:"
+          - "{% for host in ansible_play_hosts %}"
+          - "  {{ host }}:"
+          - "    Status before: {{ hostvars[host].disk_space_status_before | upper }}"
+          - "    Status after: {{ hostvars[host].disk_space_status_after | upper }}"
+          - "    Space freed: {{ hostvars[host].filesystem_cleanup_results.total_space_freed_mb | default(0) }} MB"
+          - "{% endfor %}"
+      run_once: true
+      delegate_to: localhost
+      tags:
+        - reporting
+    
+    - name: Recommend next steps
+      ansible.builtin.debug:
+        msg:
+          - "=== Recommended Next Steps ==="
+          - "{% if cleanup_dry_run %}"
+          - "This was a DRY-RUN. No files were actually deleted."
+          - ""
+          - "If you're satisfied with the results shown above:"
+          - "1. Run the playbook again with actual cleanup enabled:"
+          - "   ansible-playbook playbooks/remediate_disk_space.yml -e 'cleanup_dry_run=false'"
+          - ""
+          - "2. Or target specific hosts that need cleanup:"
+          - "   ansible-playbook playbooks/remediate_disk_space.yml -l <hostname> -e 'cleanup_dry_run=false'"
+          - "{% else %}"
+          - "Cleanup completed successfully!"
+          - ""
+          - "1. Monitor disk space over the next few days"
+          - "2. Consider scheduling regular cleanup operations"
+          - "3. If disk space is still critical, investigate:"
+          - "   - Large files: find / -type f -size +100M 2>/dev/null"
+          - "   - Disk usage by directory: du -h --max-depth=1 / | sort -hr"
+          - "   - Application-specific logs or data"
+          - "{% endif %}"
+      run_once: true
+      delegate_to: localhost
+      tags:
+        - reporting
+
+# Made with Bob

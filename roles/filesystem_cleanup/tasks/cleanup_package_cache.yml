@@ -1,0 +1,302 @@
+---
+# Tasks for cleaning up package manager caches
+# Supports apt (Debian/Ubuntu) and yum/dnf (RedHat/CentOS)
+
+- name: Detect package manager
+  ansible.builtin.set_fact:
+    package_manager: >-
+      {{
+        'apt' if ansible_os_family == 'Debian'
+        else 'dnf' if (ansible_os_family == 'RedHat' and ansible_distribution_major_version | int >= 8)
+        else 'yum' if ansible_os_family == 'RedHat'
+        else 'unknown'
+      }}
+  tags:
+    - cleanup
+    - cache
+
+- name: Display package manager detection
+  ansible.builtin.debug:
+    msg:
+      - "Detected OS Family: {{ ansible_os_family }}"
+      - "Detected Package Manager: {{ package_manager }}"
+  tags:
+    - cleanup
+    - cache
+
+# ============================================================================
+# APT (Debian/Ubuntu) Cache Cleanup
+# ============================================================================
+
+- name: Get apt cache size (Debian/Ubuntu)
+  ansible.builtin.shell: du -sh /var/cache/apt/archives 2>/dev/null | awk '{print $1}'
+  register: apt_cache_size_before
+  changed_when: false
+  failed_when: false
+  when:
+    - package_manager == 'apt'
+  tags:
+    - cleanup
+    - cache
+
+- name: Display apt cache cleanup plan (dry-run)
+  ansible.builtin.debug:
+    msg:
+      - "=== APT Cache Cleanup (DRY-RUN) ==="
+      - "Current cache size: {{ apt_cache_size_before.stdout | default('Unknown') }}"
+      - "Operations to perform:"
+      - "  - apt-get clean (remove all cached packages)"
+      - "  - apt-get autoclean (remove obsolete packages)"
+      - "  - apt-get autoremove (remove unused dependencies)" 
+      - ""
+      - "NOTE: This is a DRY-RUN. No changes will be made."
+      - "To perform actual cleanup, set cleanup_dry_run=false"
+  when:
+    - cleanup_dry_run | bool
+    - package_manager == 'apt'
+  tags:
+    - cleanup
+    - cache
+    - reporting
+
+- name: Clean apt cache (actual cleanup)
+  ansible.builtin.apt:
+    clean: yes
+  when:
+    - not cleanup_dry_run | bool
+    - package_manager == 'apt'
+  tags:
+    - cleanup
+    - cache
+
+- name: Autoclean apt cache (actual cleanup)
+  ansible.builtin.apt:
+    autoclean: yes
+  when:
+    - not cleanup_dry_run | bool
+    - package_manager == 'apt'
+  tags:
+    - cleanup
+    - cache
+
+- name: Autoremove unused packages (actual cleanup)
+  ansible.builtin.apt:
+    autoremove: yes
+  when:
+    - not cleanup_dry_run | bool
+    - package_manager == 'apt'
+    - package_autoremove_enabled | bool
+  tags:
+    - cleanup
+    - cache
+
+- name: Get apt cache size after cleanup
+  ansible.builtin.shell: du -sh /var/cache/apt/archives 2>/dev/null | awk '{print $1}'
+  register: apt_cache_size_after
+  changed_when: false
+  failed_when: false
+  when:
+    - not cleanup_dry_run | bool
+    - package_manager == 'apt'
+  tags:
+    - cleanup
+    - cache
+
+- name: Display apt cache cleanup results
+  ansible.builtin.debug:
+    msg:
+      - "=== APT Cache Cleanup Results ==="
+      - "Cache size before: {{ apt_cache_size_before.stdout | default('Unknown') }}"
+      - "Cache size after: {{ apt_cache_size_after.stdout | default('Unknown') }}"
+  when:
+    - not cleanup_dry_run | bool
+    - package_manager == 'apt'
+  tags:
+    - cleanup
+    - cache
+    - reporting
+
+# ============================================================================
+# YUM (RedHat/CentOS 7) Cache Cleanup
+# ============================================================================
+
+- name: Get yum cache size (RedHat/CentOS)
+  ansible.builtin.shell: du -sh /var/cache/yum 2>/dev/null | awk '{print $1}'
+  register: yum_cache_size_before
+  changed_when: false
+  failed_when: false
+  when:
+    - package_manager == 'yum'
+  tags:
+    - cleanup
+    - cache
+
+- name: Display yum cache cleanup plan (dry-run)
+  ansible.builtin.debug:
+    msg:
+      - "=== YUM Cache Cleanup (DRY-RUN) ==="
+      - "Current cache size: {{ yum_cache_size_before.stdout | default('Unknown') }}"
+      - "Operations to perform:"
+      - "  - yum clean all (remove all cached data)"
+      - "  - yum autoremove (remove unused dependencies)"
+      - ""
+      - "NOTE: This is a DRY-RUN. No changes will be made."
+      - "To perform actual cleanup, set cleanup_dry_run=false"
+  when:
+    - cleanup_dry_run | bool
+    - package_manager == 'yum'
+  tags:
+    - cleanup
+    - cache
+    - reporting
+
+- name: Clean yum cache (actual cleanup)
+  ansible.builtin.command: yum clean all
+  when:
+    - not cleanup_dry_run | bool
+    - package_manager == 'yum'
+  changed_when: true
+  tags:
+    - cleanup
+    - cache
+
+- name: Autoremove unused packages with yum (actual cleanup)
+  ansible.builtin.command: yum autoremove -y
+  when:
+    - not cleanup_dry_run | bool
+    - package_manager == 'yum'
+    - package_autoremove_enabled | bool
+  changed_when: true
+  tags:
+    - cleanup
+    - cache
+
+- name: Get yum cache size after cleanup
+  ansible.builtin.shell: du -sh /var/cache/yum 2>/dev/null | awk '{print $1}'
+  register: yum_cache_size_after
+  changed_when: false
+  failed_when: false
+  when:
+    - not cleanup_dry_run | bool
+    - package_manager == 'yum'
+  tags:
+    - cleanup
+    - cache
+
+- name: Display yum cache cleanup results
+  ansible.builtin.debug:
+    msg:
+      - "=== YUM Cache Cleanup Results ==="
+      - "Cache size before: {{ yum_cache_size_before.stdout | default('Unknown') }}"
+      - "Cache size after: {{ yum_cache_size_after.stdout | default('Unknown') }}"
+  when:
+    - not cleanup_dry_run | bool
+    - package_manager == 'yum'
+  tags:
+    - cleanup
+    - cache
+    - reporting
+
+# ============================================================================
+# DNF (RedHat/CentOS 8+) Cache Cleanup
+# ============================================================================
+
+- name: Get dnf cache size (RedHat/CentOS 8+)
+  ansible.builtin.shell: du -sh /var/cache/dnf 2>/dev/null | awk '{print $1}'
+  register: dnf_cache_size_before
+  changed_when: false
+  failed_when: false
+  when:
+    - package_manager == 'dnf'
+  tags:
+    - cleanup
+    - cache
+
+- name: Display dnf cache cleanup plan (dry-run)
+  ansible.builtin.debug:
+    msg:
+      - "=== DNF Cache Cleanup (DRY-RUN) ==="
+      - "Current cache size: {{ dnf_cache_size_before.stdout | default('Unknown') }}"
+      - "Operations to perform:"
+      - "  - dnf clean all (remove all cached data)"
+      - "  - dnf autoremove (remove unused dependencies)"
+      - ""
+      - "NOTE: This is a DRY-RUN. No changes will be made."
+      - "To perform actual cleanup, set cleanup_dry_run=false"
+  when:
+    - cleanup_dry_run | bool
+    - package_manager == 'dnf'
+  tags:
+    - cleanup
+    - cache
+    - reporting
+
+- name: Clean dnf cache (actual cleanup)
+  ansible.builtin.command: dnf clean all
+  when:
+    - not cleanup_dry_run | bool
+    - package_manager == 'dnf'
+  changed_when: true
+  tags:
+    - cleanup
+    - cache
+
+- name: Autoremove unused packages with dnf (actual cleanup)
+  ansible.builtin.command: dnf autoremove -y
+  when:
+    - not cleanup_dry_run | bool
+    - package_manager == 'dnf'
+    - package_autoremove_enabled | bool
+  changed_when: true
+  tags:
+    - cleanup
+    - cache
+
+- name: Get dnf cache size after cleanup
+  ansible.builtin.shell: du -sh /var/cache/dnf 2>/dev/null | awk '{print $1}'
+  register: dnf_cache_size_after
+  changed_when: false
+  failed_when: false
+  when:
+    - not cleanup_dry_run | bool
+    - package_manager == 'dnf'
+  tags:
+    - cleanup
+    - cache
+
+- name: Display dnf cache cleanup results
+  ansible.builtin.debug:
+    msg:
+      - "=== DNF Cache Cleanup Results ==="
+      - "Cache size before: {{ dnf_cache_size_before.stdout | default('Unknown') }}"
+      - "Cache size after: {{ dnf_cache_size_after.stdout | default('Unknown') }}"
+  when:
+    - not cleanup_dry_run | bool
+    - package_manager == 'dnf'
+  tags:
+    - cleanup
+    - cache
+    - reporting
+
+# ============================================================================
+# Update Statistics
+# ============================================================================
+
+- name: Update cleanup statistics
+  ansible.builtin.set_fact:
+    cleanup_stats: >-
+      {{
+        cleanup_stats | default({}) | combine({
+          'package_cache': {
+            'package_manager': package_manager,
+            'cache_size_before': (apt_cache_size_before.stdout | default(yum_cache_size_before.stdout | default(dnf_cache_size_before.stdout | default('Unknown')))),
+            'cache_size_after': (apt_cache_size_after.stdout | default(yum_cache_size_after.stdout | default(dnf_cache_size_after.stdout | default('Unknown')))),
+            'dry_run': cleanup_dry_run | bool
+          }
+        })
+      }}
+  tags:
+    - cleanup
+    - cache
+
+# Made with Bob

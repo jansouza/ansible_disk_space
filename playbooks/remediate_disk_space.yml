@@ -180,19 +180,19 @@
     
     - name: Display overall remediation summary
       ansible.builtin.debug:
-        msg:
-          - "=== Overall Remediation Summary ==="
-          - "Total hosts processed: {{ ansible_play_hosts | length }}"
-          - "Mode: {{ 'DRY-RUN' if cleanup_dry_run else 'ACTUAL CLEANUP' }}"
-          - "Total space freed across all hosts: {{ total_space_freed_all_hosts | round(2) }} MB ({{ (total_space_freed_all_hosts / 1024) | round(2) }} GB)"
-          - ""
-          - "Per-host results:"
-          - "{% for host in ansible_play_hosts %}"
-          - "  {{ host }}:"
-          - "    Status before: {{ hostvars[host].disk_space_status_before | upper }}"
-          - "    Status after: {{ hostvars[host].disk_space_status_after | upper }}"
-          - "    Space freed: {{ hostvars[host].filesystem_cleanup_results.total_space_freed_mb | default(0) }} MB"
-          - "{% endfor %}"
+        msg: |
+          === Overall Remediation Summary ===
+          Total hosts processed: {{ ansible_play_hosts | length }}
+          Mode: {{ 'DRY-RUN' if cleanup_dry_run else 'ACTUAL CLEANUP' }}
+          Total space freed across all hosts: {{ total_space_freed_all_hosts | round(2) }} MB ({{ (total_space_freed_all_hosts / 1024) | round(2) }} GB)
+          
+          Per-host results:
+          {% for host in ansible_play_hosts %}
+            {{ host }}:
+              Status before: {{ hostvars[host].disk_space_status_before | upper }}
+              Status after: {{ hostvars[host].disk_space_status_after | upper }}
+              Space freed: {{ hostvars[host].filesystem_cleanup_results.total_space_freed_mb | default(0) }} MB
+          {% endfor %}
       run_once: true
       delegate_to: localhost
       tags:
@@ -200,27 +200,27 @@
     
     - name: Recommend next steps
       ansible.builtin.debug:
-        msg:
-          - "=== Recommended Next Steps ==="
-          - "{% if cleanup_dry_run %}"
-          - "This was a DRY-RUN. No files were actually deleted."
-          - ""
-          - "If you're satisfied with the results shown above:"
-          - "1. Run the playbook again with actual cleanup enabled:"
-          - "   ansible-playbook playbooks/remediate_disk_space.yml -e 'cleanup_dry_run=false'"
-          - ""
-          - "2. Or target specific hosts that need cleanup:"
-          - "   ansible-playbook playbooks/remediate_disk_space.yml -l <hostname> -e 'cleanup_dry_run=false'"
-          - "{% else %}"
-          - "Cleanup completed successfully!"
-          - ""
-          - "1. Monitor disk space over the next few days"
-          - "2. Consider scheduling regular cleanup operations"
-          - "3. If disk space is still critical, investigate:"
-          - "   - Large files: find / -type f -size +100M 2>/dev/null"
-          - "   - Disk usage by directory: du -h --max-depth=1 / | sort -hr"
-          - "   - Application-specific logs or data"
-          - "{% endif %}"
+        msg: |
+          === Recommended Next Steps ===
+          {% if cleanup_dry_run | bool %}
+          This was a DRY-RUN. No files were actually deleted.
+          
+          If you're satisfied with the results shown above:
+          1. Run the playbook again with actual cleanup enabled:
+             ansible-playbook playbooks/remediate_disk_space.yml -e 'cleanup_dry_run=false'
+          
+          2. Or target specific hosts that need cleanup:
+             ansible-playbook playbooks/remediate_disk_space.yml -l <hostname> -e 'cleanup_dry_run=false'
+          {% else %}
+          Cleanup completed successfully!
+          
+          1. Monitor disk space over the next few days
+          2. Consider scheduling regular cleanup operations
+          3. If disk space is still critical, investigate:
+             - Large files: find / -type f -size +100M 2>/dev/null
+             - Disk usage by directory: du -h --max-depth=1 / | sort -hr
+             - Application-specific logs or data
+          {% endif %}
       run_once: true
       delegate_to: localhost
       tags:

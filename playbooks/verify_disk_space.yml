@@ -109,17 +109,17 @@
     
     - name: Recommend next steps
       ansible.builtin.debug:
-        msg:
-          - "=== Recommended Next Steps ==="
-          - "{% if hosts_critical | int > 0 or hosts_warning | int > 0 %}"
-          - "1. Review the detailed reports above for each affected host"
-          - "2. Run cleanup in dry-run mode to see what would be cleaned:"
-          - "   ansible-playbook playbooks/remediate_disk_space.yml -l <affected_hosts>"
-          - "3. If satisfied with dry-run results, perform actual cleanup:"
-          - "   ansible-playbook playbooks/remediate_disk_space.yml -l <affected_hosts> -e 'cleanup_dry_run=false'"
-          - "{% else %}"
-          - "No action required. All systems are within acceptable thresholds."
-          - "{% endif %}"
+        msg: |
+          === Recommended Next Steps ===
+          {% if hosts_critical | int > 0 or hosts_warning | int > 0 %}
+          1. Review the detailed reports above for each affected host
+          2. Run cleanup in dry-run mode to see what would be cleaned:
+             ansible-playbook playbooks/remediate_disk_space.yml -l <affected_hosts>
+          3. If satisfied with dry-run results, perform actual cleanup:
+             ansible-playbook playbooks/remediate_disk_space.yml -l <affected_hosts> -e 'cleanup_dry_run=false'
+          {% else %}
+          No action required. All systems are within acceptable thresholds.
+          {% endif %}
       run_once: true
       delegate_to: localhost
       tags:
